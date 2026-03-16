@@ -6,7 +6,6 @@ Produces: reports/elderdemand_dashboard.html (self-contained)
 import os, sys, json, warnings
 import numpy as np
 import pandas as pd
-import requests
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
@@ -310,90 +309,161 @@ def apply_layout(fig, title="", height=420):
 
 print("Building figures...")
 
-# ── F1: India State Trends Choropleth ──────────────────────
-# Fetch India state GeoJSON
-GEOJSON_URL = "https://raw.githubusercontent.com/geohacker/india/master/state/india_state.geojson"
-try:
-    geo_resp = requests.get(GEOJSON_URL, timeout=20)
-    india_geo = geo_resp.json()
-    # Map state names
-    state_name_map = {f["properties"].get("NAME_1",""):f["properties"].get("NAME_1","")
-                      for f in india_geo["features"]}
-    reg_plot = reg.copy()
-    reg_plot["state_geo"] = reg_plot["state"]
-    fig_choro = px.choropleth(
-        reg_plot,
-        geojson=india_geo,
-        locations="state_geo",
-        featureidkey="properties.NAME_1",
-        color="trends_composite",
-        color_continuous_scale=[[0,"#1E3158"],[0.4,PURPLE],[0.7,GOLD],[1.0,ACCENT]],
-        labels={"trends_composite":"Search Interest"},
-        title="Elder Care Search Demand by State",
+# ── F1: Top 15 States by Elder Care Demand Index (replaces choropleth) ─────
+# Aggregate city-level scores to state level, then merge with Google Trends
+state_city = (
+    cities.groupby("state")
+    .agg(
+        avg_demand_score=("demand_score_v2", "mean"),
+        total_senior_pop=("senior_population_65plus", "sum"),
+        avg_income=("median_hh_income_INR", "mean"),
+        city_count=("city", "count"),
+        total_rev_potential=("annual_revenue_potential_CR_INR", "sum"),
     )
-    fig_choro.update_geos(fitbounds="locations", visible=False,
-                          bgcolor=BG, lakecolor=BG)
-    fig_choro.update_layout(**CHART_LAYOUT, height=480,
-                            coloraxis_colorbar=dict(
-                                title=dict(text="Index", font=dict(color=TEXT)),
-                                tickfont=dict(color=TEXT)))
-    choro_ok = True
-except Exception as e:
-    print(f"  [WARN] Choropleth skipped: {e}")
-    choro_ok = False
+    .reset_index()
+)
+# Merge Google Trends state signal
+trends_state = reg[["state", "trends_composite"]].copy()
+state_city = state_city.merge(trends_state, on="state", how="left")
+state_city["trends_composite"] = state_city["trends_composite"].fillna(
+    state_city["trends_composite"].median()
+)
+# Composite state demand index (weighted)
+state_city["state_demand_index"] = (
+    (state_city["avg_demand_score"] / state_city["avg_demand_score"].max() * 40) +
+    (state_city["trends_composite"] / state_city["trends_composite"].max() * 30) +
+    (state_city["total_senior_pop"] / state_city["total_senior_pop"].max() * 30)
+).round(1)
 
-# ── F2: City Bubble Map ─────────────────────────────────────
-top50 = cities.sort_values("annual_revenue_potential_CR_INR", ascending=False)
+top15_states = state_city.nlargest(15, "state_demand_index").sort_values(
+    "state_demand_index", ascending=True
+)
+
+fig_choro = go.Figure()
+# Background bar (full width track)
+fig_choro.add_trace(go.Bar(
+    x=[100] * len(top15_states),
+    y=top15_states["state"],
+    orientation="h",
+    marker=dict(color=GRID, opacity=0.4),
+    showlegend=False, hoverinfo="skip",
+))
+# Demand index bar
+fig_choro.add_trace(go.Bar(
+    x=top15_states["state_demand_index"],
+    y=top15_states["state"],
+    orientation="h",
+    marker=dict(
+        color=top15_states["state_demand_index"],
+        colorscale=[[0, "#1E3158"], [0.4, PURPLE], [0.75, GOLD], [1.0, ACCENT]],
+        line=dict(color="rgba(255,255,255,0.08)", width=0.5),
+    ),
+    text=[
+        f"  {v:.0f}  |  {int(r):,} seniors  |  ₹{rev:,.0f} Cr"
+        for v, r, rev in zip(
+            top15_states["state_demand_index"],
+            top15_states["total_senior_pop"],
+            top15_states["total_rev_potential"],
+        )
+    ],
+    textposition="outside",
+    textfont=dict(color=TEXT, size=10),
+    hovertemplate=(
+        "<b>%{y}</b><br>"
+        "Demand Index: %{x:.1f}<br>"
+        "Total Seniors: %{customdata[0]:,}<br>"
+        "Google Trends: %{customdata[1]:.0f}<br>"
+        "Revenue Potential: ₹%{customdata[2]:,.0f} Cr<extra></extra>"
+    ),
+    customdata=top15_states[["total_senior_pop","trends_composite","total_rev_potential"]].values,
+    showlegend=False,
+))
+_choro_layout = {k: v for k, v in CHART_LAYOUT.items()
+                 if k not in ("xaxis", "yaxis", "margin")}
+fig_choro.update_layout(
+    **_choro_layout, height=500,
+    title="Top 15 States — Elder Care Demand Index (Search Trends + Demographics)",
+    barmode="overlay",
+    margin=dict(t=60, b=40, l=130, r=30),
+)
+fig_choro.update_xaxes(range=[0, 125], title="Demand Index (0–100)",
+                       gridcolor=GRID, zeroline=False)
+fig_choro.update_yaxes(gridcolor="rgba(0,0,0,0)", zeroline=False)
+choro_ok = True
+
+# ── F2: All 50 Cities Scatter — Demand Score vs Revenue (replaces geo map) ─
+# Assign verdict from scorecard
+verdict_map = scorecard_df.set_index("city")["verdict"].to_dict()
+cities["verdict"] = cities["city"].map(verdict_map).fillna("🟡 CONDITIONAL")
+cities["verdict_clean"] = cities["verdict"].str.replace(
+    r"^[🟢🟡🔴]\s*", "", regex=True
+)
+
+verdict_colors = {"GO": GREEN, "CONDITIONAL": GOLD, "NO-GO": ACCENT}
+verdict_order  = ["GO", "CONDITIONAL", "NO-GO"]
+
 fig_bubble = go.Figure()
-tier_colors = {1: ACCENT, 2: GOLD, 3: GREEN}
-tier_labels = {1: "Tier 1", 2: "Tier 2", 3: "Tier 3"}
-
-for tier in [1, 2, 3]:
-    sub = top50[top50["city_tier"] == tier]
-    fig_bubble.add_trace(go.Scattergeo(
-        lat=sub["latitude"], lon=sub["longitude"],
+for v in verdict_order:
+    sub = cities[cities["verdict_clean"] == v]
+    if sub.empty:
+        continue
+    fig_bubble.add_trace(go.Scatter(
+        x=sub["demand_score_v2"],
+        y=sub["annual_revenue_potential_CR_INR"],
         mode="markers+text",
+        name=v,
         marker=dict(
-            size=np.sqrt(sub["annual_revenue_potential_CR_INR"]) * 1.8,
-            color=tier_colors[tier], opacity=0.85,
-            line=dict(color="white", width=0.5),
+            size=np.sqrt(sub["senior_population_65plus"] / 1000) * 2.5,
+            color=verdict_colors[v],
+            opacity=0.82,
+            line=dict(color="rgba(255,255,255,0.3)", width=1),
             sizemode="area",
         ),
         text=sub["city"],
         textposition="top center",
-        textfont=dict(size=9, color="white"),
-        name=tier_labels[tier],
+        textfont=dict(size=8, color=TEXT),
         hovertemplate=(
             "<b>%{text}</b><br>"
-            "Revenue Potential: ₹%{customdata[0]:,.0f} Cr<br>"
-            "Demand Score: %{customdata[1]}<br>"
-            "Senior Population: %{customdata[2]:,}<extra></extra>"
+            "Demand Score: %{x:.1f}<br>"
+            "Revenue Potential: ₹%{y:,.0f} Cr<br>"
+            "Senior Population: %{customdata[0]:,}<br>"
+            "HH Income: ₹%{customdata[1]:,}<extra></extra>"
         ),
-        customdata=sub[["annual_revenue_potential_CR_INR","demand_score_v2",
-                         "senior_population_65plus"]].values,
+        customdata=sub[["senior_population_65plus", "median_hh_income_INR"]].values,
     ))
 
-fig_bubble.update_geos(
-    scope="asia",
-    center=dict(lat=22, lon=82),
-    projection_scale=4.5,
-    fitbounds=False,
-    visible=True,
-    bgcolor=BG,
-    showland=True, landcolor="#1E3158",
-    showocean=True, oceancolor="#0D1B2A",
-    showcountries=True, countrycolor="#2A3F6F",
-    showcoastlines=True, coastlinecolor="#2A3F6F",
-    showframe=False,
-    lataxis_range=[6, 38], lonaxis_range=[66, 100],
-)
+# Quadrant reference lines (median demand score and median revenue)
+med_x = cities["demand_score_v2"].median()
+med_y = cities["annual_revenue_potential_CR_INR"].median()
+for xv, label, ax in [(med_x, "Median Demand", "x"), (med_y, "Median Revenue", "y")]:
+    if ax == "x":
+        fig_bubble.add_vline(x=xv, line=dict(color=GRID, width=1, dash="dot"))
+    else:
+        fig_bubble.add_hline(y=xv, line=dict(color=GRID, width=1, dash="dot"))
+
+# Quadrant labels
+fig_bubble.add_annotation(x=cities["demand_score_v2"].max() * 0.97,
+    y=cities["annual_revenue_potential_CR_INR"].max() * 0.95,
+    text="HIGH PRIORITY", showarrow=False,
+    font=dict(size=9, color=ACCENT), xanchor="right")
+fig_bubble.add_annotation(x=med_x * 0.6,
+    y=cities["annual_revenue_potential_CR_INR"].max() * 0.95,
+    text="WATCH", showarrow=False,
+    font=dict(size=9, color=GOLD), xanchor="center")
+
+_bubble_layout = {k: v for k, v in CHART_LAYOUT.items()
+                  if k not in ("xaxis", "yaxis")}
 fig_bubble.update_layout(
-    **CHART_LAYOUT, height=550,
-    title="City Opportunity Map — Bubble Size = Revenue Potential",
-    legend=dict(x=0.01, y=0.99, bgcolor="rgba(0,0,0,0.4)",
-                bordercolor=GRID, font=dict(color=TEXT)),
-    geo=dict(bgcolor=BG),
+    **_bubble_layout, height=500,
+    title="All 50 Cities — Demand Score vs Revenue Potential (size = senior population)",
+    legend=dict(
+        title=dict(text="Verdict", font=dict(color=TEXT)),
+        bgcolor="rgba(0,0,0,0.4)", bordercolor=GRID,
+        font=dict(color=TEXT), x=0.01, y=0.99,
+    ),
 )
+fig_bubble.update_xaxes(title="Demand Score (0–100)", gridcolor=GRID, zeroline=False)
+fig_bubble.update_yaxes(title="Revenue Potential (₹ Cr)", gridcolor=GRID, zeroline=False)
 
 # ── F3: Top 10 Cities Bar Chart ────────────────────────────
 top10 = cities.head(10).copy()
@@ -956,15 +1026,14 @@ HTML = f"""<!DOCTYPE html>
   </div>
 </div>
 
-<!-- ══ SECTION 2: GEOSPATIAL ══ -->
+<!-- ══ SECTION 2: MARKET HEATMAP ══ -->
 <div class="section">
   <div class="section-header">
     India Market Heatmap
-    <div class="sub">Demand signals by state and city opportunity sizing</div>
+    <div class="sub">State-level demand index · All 50 cities scored by opportunity</div>
   </div>
   <div class="chart-grid-2">
-    {"<div class='chart-card chart-full'>" + fig_html(fig_choro) + "</div>" if choro_ok else
-     "<div class='chart-card' style='padding:20px;color:var(--muted)'>State choropleth unavailable (network)</div>"}
+    <div class="chart-card">{fig_html(fig_choro)}</div>
     <div class="chart-card">{fig_html(fig_bubble)}</div>
   </div>
 </div>
