@@ -1,0 +1,54 @@
+{
+  "project": "ElderDemand AI \u2014 Senior Care Market Intelligence Platform",
+  "collection_timestamp": "2026-03-15T23:58:00",
+  "data_sources": {
+    "world_bank": {
+      "status": "success",
+      "rows": 24,
+      "cols": ["year", "country", "country_code", "pct_pop_65plus", "count_pop_65plus",
+               "pct_urban_population", "gdp_per_capita_usd", "life_expectancy_at_birth",
+               "gni_per_capita_usd", "total_population", "health_expenditure_per_cap", "crude_death_rate"],
+      "date_range": "2000\u20132023",
+      "indicators_fetched": 9
+    },
+    "google_trends": {
+      "status": "success",
+      "datasets": {
+        "interest_over_time": {"rows": 262, "shape": "262 weeks x 5 search terms"},
+        "interest_by_region":  {"rows": 180, "shape": "36 states x 5 terms"}
+      },
+      "search_terms": [
+        "home nurse india",
+        "elder care india",
+        "old age care bangalore",
+        "caregiver india",
+        "senior care service india"
+      ]
+    },
+    "synthetic_cities": {
+      "status": "success",
+      "rows": 50,
+      "cols": ["city", "state", "city_tier", "latitude", "longitude",
+               "total_population_2023", "senior_population_65plus", "pct_population_65plus",
+               "pct_nuclear_families", "median_hh_income_INR", "healthcare_facility_density",
+               "caregiver_availability_index", "demand_score_0_100",
+               "wtp_monthly_basic_care_INR", "wtp_monthly_nurse_visit_INR",
+               "wtp_monthly_full_time_INR", "wtp_monthly_daycare_INR",
+               "potential_customer_households", "annual_revenue_potential_CR_INR"],
+      "methodology": "Census 2011 + NSSO + RBI Household Finance anchored with stochastic noise"
+    }
+  },
+  "files_collected": [
+    "world_bank_india_demographics.csv",
+    "world_bank_india_demographics.json",
+    "trends_interest_over_time.csv",
+    "trends_interest_by_region.csv",
+    "india_50cities_eldercare.csv",
+    "india_50cities_eldercare.json"
+  ],
+  "next_steps": [
+    "Run src/visualizations.py to generate Plotly charts",
+    "Run src/market_model.py to train demand prediction model",
+    "Open dashboards/index.html for interactive explorer"
+  ]
+}

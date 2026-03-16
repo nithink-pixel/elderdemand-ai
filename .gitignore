@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Large / generated files
+# The dashboard HTML is large but valuable — keep it
+# Uncomment below if you want to exclude it:
+# reports/elderdemand_dashboard.html
+
+# Raw JSON duplicates (CSV is enough for git)
+data/raw/*.json
+!data/raw/_collection_report.json
+
+# Secrets / credentials
+.env
+*.key
+*.pem
+secrets.py
